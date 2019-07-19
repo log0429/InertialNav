@@ -19,6 +19,7 @@
 % Journal of Guidance, Control, and Dynamics, Vol. 26, No. 6 (2003), 
 % pp. 855-860.
 
+%=======================================24个状态变量
 % State vector:
 % error rotation vector in body frame (X,Y,Z)
 % Velocity - m/sec (North, East, Down)
@@ -30,6 +31,7 @@
 % Body Magnetic Field Vector - (X,Y,Z)
 % Wind Vector  - m/sec (North,East)
 
+%=======================================观测量
 % Observations:
 % NED velocity - m/s
 % NED position - m
@@ -41,7 +43,7 @@
 % XYZ delta angle measurements in body axes - rad
 % XYZ delta velocity measurements in body axes - m/sec
 
-
+%===========================================定义符号变量
 %% define symbolic variables and constants
 clear all;
 reset(symengine);
@@ -74,37 +76,56 @@ syms rho 'real' % air density (kg/m^3)
 syms R_ACC 'real' % variance of accelerometer measurements (m/s^2)^2
 syms Kaccx Kaccy 'real' % derivative of X and Y body specific forces wrt componenent of true airspeed along each axis (1/s)
 
+%=================================================================定义状态矩阵
 %% define the state prediction equations
 
+%================dax; day; daz; dvx; dvy; dvz分别是陀螺仪和加速度计测出来的三轴角度增量和三轴速度增量（机坐标体系）
+%================对应的dAngMeas和dVelMeas就是三轴角度增量和三轴速度增量组成的向量
 % define the measured Delta angle and delta velocity vectors
 dAngMeas = [dax; day; daz];
 dVelMeas = [dvx; dvy; dvz];
 
+%================dax_b; day_b; daz_b; dax_s; day_s; daz_s; dvz_b分别是三轴角增量偏差、三轴陀螺仪比例因子和z轴速度偏差
+%================几个数据是为了纠正对角度和速度的测量值
 % define the IMU bias errors and scale factor
 dAngBias = [dax_b; day_b; daz_b];
 dAngScale = [dax_s; day_s; daz_s];
 dVelBias = [0;0;dvz_b];
 
+%================定义表示姿态的四元数
 % define the quaternion rotation vector for the state estimate
 estQuat = [q0;q1;q2;q3];
 
+
+%=============== 定义表示姿态误差的旋转矢量
 % define the attitude error rotation vector, where error = truth - estimate
 errRotVec = [rotErrX;rotErrY;rotErrZ];
 
+%=================定义和旋转矢量等效的四元数（欧拉角、四元数、方向余弦矩阵和旋转矢量是可以相互转换的）
+%=================这种表示是一种近似的表示方法
+%=================推导难点在于，陀螺仪测量的三轴角度增量和旋转矢量之间的转换，旋转矢量和四元数之间的关系
+%=================结论：在角度增量很小时，陀螺仪测量的三轴角度增量和旋转矢量是相等的
 % define the attitude error quaternion using a first order linearisation
 errQuat = [1;0.5*errRotVec];
 
+%=================定义表示真实姿态角的四元数
+%=================四元数的乘法和除法就是姿态的加或减
 % Define the truth quaternion as the estimate + error
 truthQuat = QuatMult(estQuat, errQuat);
 
+
 % derive the truth body to nav direction cosine matrix
+% =================求出坐标转换矩阵
 Tbn = Quat2Tbn(truthQuat);
 
+%==================真实角度增量 = 角度增量测量值 * 比例因子 - 三轴角度增量的偏差（补偿）- 测量噪声
 % define the truth delta angle
 % ignore coning compensation as these effects are negligible in terms of 
 % covariance growth for our application and grade of sensor
 dAngTruth = dAngMeas.*dAngScale - dAngBias - [daxNoise;dayNoise;dazNoise];
 
+
+%==================真实的角度增量转换为四元数
 % define the attitude update equations
 % use a first order expansion of rotation to calculate the quaternion increment
 % acceptable for propagation of covariances
@@ -113,24 +134,32 @@ deltaQuat = [1;
     0.5*dAngTruth(2);
     0.5*dAngTruth(3);
     ];
+%==================获得表示真实姿态角的四元数，四元数的乘法，就是姿态角的累加
 truthQuatNew = QuatMult(truthQuat,deltaQuat);
+%==================角度误差四元数
 % calculate the updated attitude error quaternion with respect to the previous estimate
 errQuatNew = QuatDivide(truthQuatNew,estQuat);
+%==================根据之前所说的公式，反向推导的误差旋转矢量
 % change to a rotaton vector - this is the error rotation vector updated state
 errRotNew = 2 * [errQuatNew(2);errQuatNew(3);errQuatNew(4)];
 
+
+%==================真实三轴速度 = 三轴速度测量值 - 三轴速度偏差（补偿） - 速度测量噪声，角度和速度的测量都是在机体坐标系下进行的
 % Define the truth delta velocity -ignore sculling and transport rate
 % corrections as these negligible are in terms of covariance growth for our
 % application and grade of sensor
 dVelTruth = dVelMeas - dVelBias - [dvxNoise;dvyNoise;dvzNoise];
 
+%=================本时刻速度（北东地坐标系） = 上一时刻速度 + 重力加速度产生的速度 + 由机体坐标系转换到导航坐标系（北东地坐标系）下的速度
 % define the velocity update equations
 % ignore coriolis terms for linearisation purposes
 vNew = [vn;ve;vd] + [0;0;gravity]*dt + Tbn*dVelTruth;
 
+%=================本时刻的位置 = 上一时刻的位置 + 本时刻的速度*时间间隔
 % define the position update equations
 pNew = [pn;pe;pd] + [vn;ve;vd]*dt;
 
+%=================下面的这些量，假设它们不变
 % define the IMU error update equations
 dabNew = [dax_b; day_b; daz_b];
 dasNew = [dax_s; day_s; daz_s];
@@ -150,19 +179,25 @@ magXnew = magX;
 magYnew = magY;
 magZnew = magZ;
 
+%=============================状态向量stateVector
 % Define the state vector & number of states
 stateVector = [errRotVec;vn;ve;vd;pn;pe;pd;dax_b;day_b;daz_b;dax_s;day_s;daz_s;dvz_b;magN;magE;magD;magX;magY;magZ;vwn;vwe];
 nStates=numel(stateVector);
 
+%=============================新的状态向量，公式中预测得到的x'，也就是f，由x和f即可得到状态转移矩阵F
 % Define vector of process equations
 newStateVector = [errRotNew;vNew;pNew;dabNew;dasNew;dvbNew;magNnew;magEnew;magDnew;magXnew;magYnew;magZnew;vwnNew;vweNew];
 
+%=============================求解雅克比矩阵，即求状态转移矩阵F
 % derive the state transition matrix
 F = jacobian(newStateVector, stateVector);
+%=============================设置旋转矢量为0
 % set the rotation error states to zero
 F = subs(F, {'rotErrX', 'rotErrY', 'rotErrZ'}, {0,0,0});
+%=============================简化状态转移矩阵F，将F中的元素提取成一个个因子赋值给SF，然后用SF表示F
 [F,SF]=OptimiseAlgebra(F,'SF');
 
+%=============================定义初始的协方差矩阵P，其元素全部是符号变量，matlab中的矩阵、向量下标都是从1开始
 % define a symbolic covariance matrix using strings to represent 
 % '_l_' to represent '( '
 % '_c_' to represent ,
@@ -185,6 +220,7 @@ save 'StatePrediction.mat';
 % solution is assumed to be driven by 'noise' in the delta angles and
 % velocities, after bias effects have been removed. This is OK becasue we
 % have sensor bias accounted for in the state equations.
+% ======================定义测量（角度、速度）噪声矢量
 distVector = [daxNoise;dayNoise;dazNoise;dvxNoise;dvyNoise;dvzNoise];
 
 % derive the control(disturbance) influence matrix
@@ -192,22 +228,32 @@ G = jacobian(newStateVector, distVector);
 G = subs(G, {'rotErrX', 'rotErrY', 'rotErrZ'}, {0,0,0});
 [G,SG]=OptimiseAlgebra(G,'SG');
 
+% ======================通过测量（角度、速度）噪声，生成过程噪声协方差矩阵
 % derive the state error matrix
 distMatrix = diag(distVector.^2);
+
+% ======================通过公式计算新的过程噪声协方差矩阵Q
 Q = G*distMatrix*transpose(G);
+% ======================提取公因子，赋值SQ，并用SQ表示Q
 [Q,SQ]=OptimiseAlgebra(Q,'SQ');
 
 % remove the disturbance noise from the process equations as it is only
 % needed when calculating the disturbance influence matrix
+% =====================清零向量vNew中指定元素的值
 vNew = subs(vNew,{'daxNoise','dayNoise','dazNoise','dvxNoise','dvyNoise','dvzNoise'}, {0,0,0,0,0,0});
+% ======================清零向量errRotNew中指定元素的值
 errRotNew = subs(errRotNew,{'daxNoise','dayNoise','dazNoise','dvxNoise','dvyNoise','dvzNoise'}, {0,0,0,0,0,0});
 
 % Derive the predicted covariance matrix using the standard equation
+% ======================根据公式，更新预测协方差估计
 PP = F*P*transpose(F) + Q;
 
 % Collect common expressions to optimise processing
+% ======================简化矩阵PP,提取公因子，赋值SPP，并用SPP简化PP
 [PP,SPP]=OptimiseAlgebra(PP,'SPP');
 
+% ======================将上述变量保存到StateAndCovariancePrediction.mat文件中
+% ======================在matlab中加载这个文件，输入上述任意一个变量，会返回这个变量的值
 save('StateAndCovariancePrediction.mat');
 clear all;
 reset(symengine);
@@ -246,11 +292,18 @@ reset(symengine);
 %% derive equations for fusion of magnetic field measurement
 load('StatePrediction.mat');
 
+% ======================观测模型
+% ======================测量到的三轴磁通量应该是地磁场在北东地坐标系下的值旋转到机体坐标系下再加上机体坐标系下磁通量的补偿
+% ======================（个补偿来自于磁罗盘和机体坐标系的差异，如果完全对齐，这个值应该是0）
 magMeas = transpose(Tbn)*[magN;magE;magD] + [magX;magY;magZ]; % predicted measurement
+
+% ======================求解观测矩阵，并化简
 H_MAG = jacobian(magMeas,stateVector); % measurement Jacobian
 H_MAG = subs(H_MAG, {'rotErrX', 'rotErrY', 'rotErrZ'}, {0,0,0});
 [H_MAG,SH_MAG]=OptimiseAlgebra(H_MAG,'SH_MAG');
 
+
+% =======================求解卡尔曼增益
 K_MX = (P*transpose(H_MAG(1,:)))/(H_MAG(1,:)*P*transpose(H_MAG(1,:)) + R_MAG); % Kalman gain vector
 [K_MX,SK_MX]=OptimiseAlgebra(K_MX,'SK_MX');
 K_MY = (P*transpose(H_MAG(2,:)))/(H_MAG(2,:)*P*transpose(H_MAG(2,:)) + R_MAG); % Kalman gain vector
@@ -375,6 +428,7 @@ reset(symengine);
 %% derive equations for fusion of 321 sequence yaw measurement
 load('StatePrediction.mat');
 
+%=========================================================================对偏航角做简单的修正
 % Calculate the yaw (first rotation) angle from the 321 rotation sequence
 angMeas = atan(Tbn(2,1)/Tbn(1,1));
 H_YAW321 = jacobian(angMeas,stateVector); % measurement Jacobian
